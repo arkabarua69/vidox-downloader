@@ -1,0 +1,13 @@
+{
+  "name": "Vidox Downloader",
+  "short_name": "Vidox",
+  "description": "Download videos from 1000+ social media sites",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f0f0f",
+  "theme_color": "#e63946",
+  "orientation": "any",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

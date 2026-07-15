@@ -1,0 +1,93 @@
+{
+  "name": "vidox-downloader",
+  "version": "1.0.0",
+  "description": "Vidox Downloader - Download videos from 1000+ social media sites",
+  "author": "Mac GunJon",
+  "private": true,
+  "main": "electron/main.js",
+  "homepage": ".",
+  "scripts": {
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "client": "cd client && node node_modules/vite/bin/vite.js",
+    "server": "cd server && node index.js",
+    "build": "cd client && npm run build",
+    "start": "npm run server",
+    "electron:dev": "concurrently \"npm run server\" \"wait-on http://localhost:3001 && electron .\"",
+    "electron:build": "npm run build && electron-builder --win",
+    "electron:build:linux": "npm run build && electron-builder --linux"
+  },
+  "build": {
+    "appId": "com.vidox.downloader",
+    "productName": "Vidox Downloader",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "electron/**/*",
+      "client/dist/**/*",
+      "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "bin-win",
+        "to": "bin"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "electron/icon.ico",
+      "artifactName": "VidoxDownloader-Setup-${version}-win64.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "electron/icon.ico",
+      "uninstallerIcon": "electron/icon.ico",
+      "installerHeaderIcon": "electron/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Vidox Downloader",
+      "menuCategory": true,
+      "installerLanguages": null,
+      "artifactName": "VidoxDownloader-Setup-${version}-win64.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "electron/icon.png",
+      "category": "AudioVideo",
+      "artifactName": "VidoxDownloader-${version}-linux.${ext}"
+    }
+  },
+  "devDependencies": {
+    "basic-ftp": "^6.0.1",
+    "concurrently": "^9.0.0",
+    "electron": "^35.0.0",
+    "electron-builder": "^26.0.0",
+    "ftp": "^0.3.10",
+    "ssh2": "^1.17.0",
+    "vercel": "^55.0.0",
+    "wait-on": "^8.0.0"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "uuid": "^10.0.0"
+  }
+}
