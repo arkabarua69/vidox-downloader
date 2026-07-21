@@ -2,16 +2,29 @@ import https from "https";
 
 const YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3";
 const PIPED_INSTANCES = [
-  "https://api.piped.private.coffee",
   "https://pipedapi.kavin.rocks",
   "https://api.piped.yt",
-  "https://watchapi.whatever.social",
-  "https://piped-api.lunar.icu",
-  "https://pipedapi.in.projectsegfau.lt",
+  "https://pipedapi.adminforge.de",
+  "https://pipedapi.leptons.xyz",
+  "https://pipedapi-libre.kavin.rocks",
+  "https://piped-api.privacy.com.de",
+  "https://pipedapi.nosebs.ru",
+  "https://pipedapi.owo.si",
+  "https://pipedapi.ducks.party",
+  "https://piped-api.codespace.cz",
+];
+
+const INVIOUS_INSTANCES = [
+  "https://invidious.nerdvpn.de",
+  "https://inv.tux.pizza",
+  "https://invidious.jing.rocks",
+  "https://iv.datura.network",
+  "https://yewtu.be",
+  "https://vid.puffyan.us",
 ];
 
 function fetchJson(url, options = {}) {
-  const timeout = options.timeout || 10000;
+  const timeout = options.timeout || 6000;
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const reqOptions = {
@@ -49,6 +62,27 @@ function formatDuration(secs) {
   const s = Math.floor(secs % 60);
   if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
   return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+async function parallelFirst(fns) {
+  return new Promise((resolve) => {
+    let resolved = false;
+    let errors = 0;
+    for (const fn of fns) {
+      fn().then((result) => {
+        if (!resolved && result) {
+          resolved = true;
+          resolve(result);
+        }
+      }).catch(() => {
+        errors++;
+        if (errors >= fns.length && !resolved) {
+          resolved = true;
+          resolve(null);
+        }
+      });
+    }
+  });
 }
 
 function formatViews(n) {
@@ -109,22 +143,42 @@ function normalizePipedResult(item) {
 
 async function pipedSearch(query, maxResults = 20) {
   const params = new URLSearchParams({ q: query, filter: "videos" });
-  for (const base of PIPED_INSTANCES) {
-    try {
-      const data = await fetchJson(`${base}/search?${params}`);
-      const items = (data.items || []).filter((i) => i.type === "stream" || i.url?.includes("/watch")).slice(0, maxResults);
-      if (items.length > 0) return items.map(normalizePipedResult);
-    } catch {}
-  }
-  return [];
+  const tryInstances = PIPED_INSTANCES.slice(0, 5);
+  const result = await parallelFirst(tryInstances.map((base) => async () => {
+    const data = await fetchJson(`${base}/search?${params}`, { timeout: 5000 });
+    const items = (data.items || []).filter((i) => i.type === "stream" || i.url?.includes("/watch")).slice(0, maxResults);
+    return items.length > 0 ? items.map(normalizePipedResult) : null;
+  }));
+  return result || [];
 }
 
 async function pipedRelated(videoId, maxResults = 20) {
-  for (const base of PIPED_INSTANCES) {
+  const tryInstances = PIPED_INSTANCES.slice(0, 5);
+  const pipedResult = await parallelFirst(tryInstances.map((base) => async () => {
+    const data = await fetchJson(`${base}/streams/${videoId}`, { timeout: 5000 });
+    const items = (data.relatedStreams || []).filter((i) => i.type === "stream").slice(0, maxResults);
+    return items.length > 0 ? items.map(normalizePipedResult) : null;
+  }));
+  if (pipedResult && pipedResult.length > 0) return pipedResult;
+
+  for (const base of INVIOUS_INSTANCES) {
     try {
-      const data = await fetchJson(`${base}/streams/${videoId}`);
-      const items = (data.relatedStreams || []).filter((i) => i.type === "stream").slice(0, maxResults);
-      if (items.length > 0) return items.map(normalizePipedResult);
+      const data = await fetchJson(`${base}/api/v1/videos/${videoId}?fields=relatedVideos`, { timeout: 5000 });
+      const items = (data.relatedVideos || []).filter((i) => i.type === "video" && i.videoId).slice(0, maxResults);
+      if (items.length > 0) {
+        return items.map((item) => ({
+          id: item.videoId,
+          title: item.title || "",
+          channel: item.author || "",
+          channelThumbnail: item.authorThumbnail || "",
+          views: formatViews(item.viewCount),
+          time: formatPublishedAt(item.published * 1000 || 0),
+          duration: formatDuration(item.lengthSeconds),
+          thumbnail: item.videoThumbnails?.[0]?.url || `https://img.youtube.com/vi/${item.videoId}/hqdefault.jpg`,
+          description: (item.description || "").substring(0, 200),
+          type: "video",
+        }));
+      }
     } catch {}
   }
   return [];
@@ -185,29 +239,95 @@ export async function searchVideos(query, maxResults = 20) {
   try {
     const results = await pipedSearch(query, maxResults);
     if (results.length > 0) return results;
-  } catch (e) {
-    console.error("PIPED_SEARCH_FALLBACK:", e.message);
-  }
+  } catch {}
+
+  const invidiousResult = await parallelFirst(INVIOUS_INSTANCES.map((base) => async () => {
+    const params = new URLSearchParams({ q: query, type: "video", sort_by: "relevance" });
+    const data = await fetchJson(`${base}/api/v1/search?${params}`, { timeout: 5000 });
+    const items = (data || []).filter((i) => i.type === "video" && i.videoId).slice(0, maxResults);
+    return items.length > 0 ? items.map((item) => ({
+      id: item.videoId,
+      title: item.title || "",
+      channel: item.author || "",
+      channelThumbnail: item.authorThumbnail || "",
+      views: formatViews(item.viewCount),
+      time: formatPublishedAt(item.published * 1000 || 0),
+      duration: formatDuration(item.lengthSeconds),
+      thumbnail: item.videoThumbnails?.[0]?.url || `https://img.youtube.com/vi/${item.videoId}/hqdefault.jpg`,
+      description: (item.description || "").substring(0, 200),
+      type: "video",
+    })) : null;
+  }));
+  if (invidiousResult && invidiousResult.length > 0) return invidiousResult;
 
   try {
     return await ytApiSearch(query, maxResults);
-  } catch (e) {
-    console.error("YT_API_SEARCH_ERROR:", e.message);
-    throw e;
+  } catch {
+    return [];
   }
 }
 
 export async function getTrendingVideos(regionCode = "US", maxResults = 20) {
-  for (const base of PIPED_INSTANCES) {
+  const tryInstances = PIPED_INSTANCES.slice(0, 5);
+  const pipedResult = await parallelFirst(tryInstances.map((base) => async () => {
+    const data = await fetchJson(`${base}/trending?region=${regionCode}`, { timeout: 5000 });
+    const items = (Array.isArray(data) ? data : data.items || []).filter((i) => (i.type === "stream" || i.url?.includes("/watch")) && i.duration > 0);
+    return items.length > 0 ? items.slice(0, maxResults).map(normalizePipedResult) : null;
+  }));
+  if (pipedResult && pipedResult.length > 0) return pipedResult;
+
+  for (const base of INVIOUS_INSTANCES) {
     try {
-      const data = await fetchJson(`${base}/trending?region=${regionCode}`);
-      const items = (Array.isArray(data) ? data : data.items || []).filter((i) => (i.type === "stream" || i.url?.includes("/watch")) && i.duration > 0);
-      if (items.length > 0) return items.slice(0, maxResults).map(normalizePipedResult);
+      const params = new URLSearchParams({ region: regionCode });
+      const data = await fetchJson(`${base}/api/v1/trending?${params}`, { timeout: 5000 });
+      const items = (data || []).filter((i) => i.type === "video" && i.videoId && i.lengthSeconds > 0).slice(0, maxResults);
+      if (items.length > 0) {
+        return items.map((item) => ({
+          id: item.videoId,
+          title: item.title || "",
+          channel: item.author || "",
+          channelThumbnail: item.authorThumbnail || "",
+          views: formatViews(item.viewCount),
+          time: formatPublishedAt(item.published * 1000 || 0),
+          duration: formatDuration(item.lengthSeconds),
+          thumbnail: item.videoThumbnails?.[0]?.url || `https://img.youtube.com/vi/${item.videoId}/hqdefault.jpg`,
+          description: (item.description || "").substring(0, 200),
+          type: "video",
+        }));
+      }
     } catch {}
   }
 
   const apiKey = getApiKey();
-  if (!apiKey) throw new Error("YOUTUBE_API_KEY not configured");
+  if (!apiKey) return [];
+
+  try {
+    const params = new URLSearchParams({ part: "snippet,contentDetails,statistics", chart: "mostPopular", regionCode, maxResults: String(maxResults), key: apiKey });
+    const data = await fetchJson(`${YOUTUBE_API_BASE}/videos?${params}`);
+
+    const channelIds = (data.items || []).map((i) => i.snippet?.channelId);
+    const avatarMap = await fetchChannelAvatars(channelIds, apiKey);
+
+    return (data.items || []).map((item) => {
+      const views = item.statistics?.viewCount ? formatViews(Number(item.statistics.viewCount)) : "";
+      const channelId = item.snippet?.channelId || "";
+      return {
+        id: item.id,
+        title: item.snippet?.title || "",
+        channel: item.snippet?.channelTitle || "",
+        channelId,
+        channelThumbnail: avatarMap[channelId] || "",
+        views,
+        time: formatPublishedAtItem(item.snippet?.publishedAt),
+        duration: parseISO8601Duration(item.contentDetails?.duration) || "",
+        thumbnail: item.snippet?.thumbnails?.high?.url || item.snippet?.thumbnails?.default?.url || "",
+        description: (item.snippet?.description || "").substring(0, 200),
+        type: "video",
+      };
+    });
+  } catch {
+    return [];
+  }
 
   const params = new URLSearchParams({ part: "snippet,contentDetails,statistics", chart: "mostPopular", regionCode, maxResults: String(maxResults), key: apiKey });
   const data = await fetchJson(`${YOUTUBE_API_BASE}/videos?${params}`);

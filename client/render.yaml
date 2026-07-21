@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: vidox-downloader
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: YOUTUBE_API_KEY
+        sync: false
+      - key: YOUTUBE_COOKIES
+        sync: false
+      - key: COOKIE_REFRESH_SECRET
+        sync: false

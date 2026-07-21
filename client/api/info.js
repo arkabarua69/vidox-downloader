@@ -1,12 +1,13 @@
 import { rateLimit, getClientIp } from "./_lib/rate-limit.js";
 import { searchVideos, getTrendingVideos, getRelatedVideos } from "./_lib/youtube-api.js";
 import { getCached, setCache } from "./_lib/cache.js";
+const { default: ytdl } = await import("@distube/ytdl-core");
 
 const PRENIV_API = "https://prenivapi.vercel.app/api/youtube?url=";
 
 async function fetchViaPrenivApi(videoUrl) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20000);
+  const timeout = setTimeout(() => controller.abort(), 8000);
   try {
     const response = await fetch(`${PRENIV_API}${encodeURIComponent(videoUrl)}`, {
       signal: controller.signal,
@@ -26,9 +27,17 @@ async function fetchViaPrenivApi(videoUrl) {
 }
 
 async function fetchJson(url) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.json();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json();
+  } catch (e) {
+    clearTimeout(timeout);
+    throw e;
+  }
 }
 
 async function fetchYouTubeMetadata(videoId) {
@@ -62,7 +71,6 @@ async function fetchYouTubeMetadata(videoId) {
       duration_string: duration,
     };
   } catch (e) {
-    console.error("YT_API_FALLBACK_ERROR:", e.message);
     return null;
   }
 }
@@ -83,15 +91,6 @@ function parseISO8601DurationRaw(iso) {
   return parseInt(m[1] || "0") * 3600 + parseInt(m[2] || "0") * 60 + parseInt(m[3] || "0");
 }
 
-function formatDuration(seconds) {
-  if (!seconds || seconds === 0) return "0:00";
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  return `${m}:${String(s).padStart(2, "0")}`;
-}
-
 function extractIdFromUrl(url) {
   try {
     const match = url.match(/(?:v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/);
@@ -103,6 +102,17 @@ function extractIdFromUrl(url) {
     if (/^[a-zA-Z0-9_-]{11}$/.test(url.trim())) return url.trim();
     return "unknown";
   } catch { return "unknown"; }
+}
+
+async function fetchRelatedWithCache(videoId, title, channelId) {
+  const relatedCacheKey = `related:${videoId}`;
+  let related = getCached(relatedCacheKey);
+  if (related) return related;
+  try {
+    related = await getRelatedVideos(videoId, title || "", channelId || "", 12);
+    if (related && related.length > 0) setCache(relatedCacheKey, related, 2 * 60 * 60 * 1000);
+    return related || [];
+  } catch { return []; }
 }
 
 function buildResult(videoId, prenivData, ytMeta) {
@@ -122,6 +132,7 @@ function buildResult(videoId, prenivData, ytMeta) {
     upload_date: ytMeta?.upload_date || "",
     view_count: ytMeta?.view_count || 0,
     description: ytMeta?.description || "",
+    source: "preniv",
     hlsUrl: "",
     streamUrl: bestVideo?.url || "",
     audioUrl: audioFormats[0]?.url || "",
@@ -157,77 +168,145 @@ function buildResult(videoId, prenivData, ytMeta) {
   };
 }
 
+function buildResultFromYtdl(videoId, ytdlInfo, ytMeta) {
+  const allFormats = ytdlInfo.formats || [];
+
+  const combined = allFormats
+    .filter((f) => f.url && f.qualityLabel && f.audioBitrate)
+    .sort((a, b) => (b.height || 0) - (a.height || 0));
+
+  const adaptiveVideo = allFormats
+    .filter((f) => f.url && f.qualityLabel && !f.audioBitrate)
+    .sort((a, b) => (b.height || 0) - (a.height || 0));
+
+  const adaptiveAudio = allFormats
+    .filter((f) => f.url && f.audioBitrate)
+    .sort((a, b) => (b.audioBitrate || 0) - (a.audioBitrate || 0));
+
+  const details = ytdlInfo.videoDetails || {};
+
+  return {
+    id: videoId,
+    title: details.title || ytMeta?.title || "Untitled",
+    thumbnail: details.thumbnail?.thumbnails?.[0]?.url || details.thumbnails?.[0]?.url || ytMeta?.thumbnail || `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+    duration: details.lengthSeconds ? parseInt(details.lengthSeconds) : (ytMeta?.duration || 0),
+    duration_string: ytMeta?.duration_string || "",
+    uploader: details.author?.name || ytMeta?.uploader || "Unknown",
+    channelId: details.author?.id || ytMeta?.channelId || "",
+    channelThumbnail: ytMeta?.channelThumbnail || "",
+    upload_date: ytMeta?.upload_date || "",
+    view_count: details.viewCount ? parseInt(details.viewCount) : (ytMeta?.view_count || 0),
+    description: ytMeta?.description || "",
+    source: "ytdl",
+    hlsUrl: "",
+    streamUrl: combined[0]?.url || "",
+    audioUrl: adaptiveAudio[0]?.url || "",
+    relatedVideos: [],
+    formats: [
+      ...combined.map((f) => ({
+        formatId: `ytdl_video_${f.itag}`,
+        ext: f.container || "mp4",
+        resolution: f.qualityLabel || "auto",
+        fps: f.fps || null,
+        vcodec: f.videoCodec || "h264",
+        acodec: f.audioCodec || "aac",
+        filesize: f.contentLength || f.content_length || 0,
+        formatNote: "video_with_audio",
+        qualityLabel: f.qualityLabel || "auto",
+        tbr: f.averageBitrate || f.bitrate || 0,
+        directUrl: f.url,
+      })),
+      ...adaptiveVideo.map((f) => ({
+        formatId: `ytdl_avideo_${f.itag}`,
+        ext: f.container || "mp4",
+        resolution: f.qualityLabel || "auto",
+        fps: f.fps || null,
+        vcodec: f.videoCodec || "h264",
+        acodec: "none",
+        filesize: f.contentLength || f.content_length || 0,
+        formatNote: "video_only",
+        qualityLabel: f.qualityLabel || "auto",
+        tbr: f.averageBitrate || f.bitrate || 0,
+        directUrl: f.url,
+      })),
+      ...adaptiveAudio.map((f) => ({
+        formatId: `ytdl_audio_${f.itag}`,
+        ext: f.container || "m4a",
+        resolution: "audio only",
+        fps: null,
+        vcodec: "none",
+        acodec: f.audioCodec || "aac",
+        filesize: f.contentLength || f.content_length || 0,
+        formatNote: "audio",
+        qualityLabel: f.audioBitrate ? `${f.audioBitrate}kbps` : "128kbps",
+        tbr: f.averageBitrate || f.bitrate || 0,
+        directUrl: f.url,
+      })),
+    ],
+  };
+}
+
 async function handleVideoRequest(videoId, res) {
   const cacheKey = `info:${videoId}`;
   const cached = getCached(cacheKey);
   if (cached) {
     if (!cached.relatedVideos || cached.relatedVideos.length === 0) {
-      try {
-        const relatedCacheKey = `related:${videoId}`;
-        let related = getCached(relatedCacheKey);
-        if (!related) {
-          related = await getRelatedVideos(videoId, cached.title, cached.channelId || "", 12);
-          if (related && related.length > 0) setCache(relatedCacheKey, related, 2 * 60 * 60 * 1000);
-        }
-        cached.relatedVideos = related || [];
-        setCache(cacheKey, cached, 30 * 60 * 1000);
-      } catch {}
+      const related = await fetchRelatedWithCache(videoId, cached.title, cached.channelId);
+      cached.relatedVideos = related;
+      setCache(cacheKey, cached, 30 * 60 * 1000);
     }
     res.setHeader("X-Cache", "HIT");
     return res.json(cached);
   }
 
   const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const ytMetaPromise = fetchYouTubeMetadata(videoId).catch(() => null);
 
-  // Primary: prenivapi (free CORS API with direct CDN stream URLs)
-  try {
-    const prenivData = await fetchViaPrenivApi(ytUrl);
-
-    let ytMeta = null;
-    try { ytMeta = await fetchYouTubeMetadata(videoId); } catch {}
-
-    const result = buildResult(videoId, prenivData, ytMeta);
-
-    try {
-      const relatedCacheKey = `related:${videoId}`;
-      let related = getCached(relatedCacheKey);
-      if (!related) {
-        related = await getRelatedVideos(videoId, result.title, ytMeta?.channelId || "", 12);
-        if (related && related.length > 0) setCache(relatedCacheKey, related, 2 * 60 * 60 * 1000);
-      }
-      result.relatedVideos = related || [];
-    } catch {}
-
-    setCache(cacheKey, result, 30 * 60 * 1000);
-    res.setHeader("X-Cache", "MISS");
-    return res.json(result);
-  } catch (e) {
+  const prenivPromise = fetchViaPrenivApi(ytUrl).catch((e) => {
     console.error("PRENIV_API_ERROR:", e.message);
-  }
+    return null;
+  });
 
-  // Fallback: YouTube API metadata only (no stream URL)
+  let ytdlInfoPromise = null;
   try {
-    const ytMeta = await fetchYouTubeMetadata(videoId);
-    if (ytMeta) {
-      const result = { id: videoId, ...ytMeta, hlsUrl: "", streamUrl: "", audioUrl: "", relatedVideos: [], formats: [] };
-      try {
-        const relatedCacheKey = `related:${videoId}`;
-        let related = getCached(relatedCacheKey);
-        if (!related) {
-          related = await getRelatedVideos(videoId, ytMeta.title, ytMeta.channelId || "", 12);
-          if (related && related.length > 0) setCache(relatedCacheKey, related, 2 * 60 * 60 * 1000);
-        }
-        result.relatedVideos = related || [];
-      } catch {}
-      setCache(cacheKey, result, 15 * 60 * 1000);
-      res.setHeader("X-Cache", "MISS");
-      return res.json(result);
-    }
+    const origCwd = process.cwd();
+    process.chdir("/tmp");
+    ytdlInfoPromise = Promise.race([
+      ytdl.getInfo(videoId).finally(() => process.chdir(origCwd)),
+      new Promise((_, reject) => setTimeout(() => { process.chdir(origCwd); reject(new Error("ytdl timeout")); }, 12000)),
+    ]).catch((e) => { process.chdir(origCwd); console.error("YTDLCORE_ERROR:", e.message); return null; });
   } catch (e) {
-    console.error("YT_API_FALLBACK_ERROR:", e.message);
+    ytdlInfoPromise = Promise.resolve(null);
   }
 
-  return res.status(500).json({ error: "Failed to fetch video info." });
+  const [prenivData, ytdlInfo, ytMeta] = await Promise.all([prenivPromise, ytdlInfoPromise, ytMetaPromise]);
+
+  let result = null;
+  let source = null;
+
+  const ytdlResult = ytdlInfo && ytdlInfo.formats && ytdlInfo.formats.length > 0
+    ? buildResultFromYtdl(videoId, ytdlInfo, ytMeta) : null;
+
+  if (prenivData) {
+    result = buildResult(videoId, prenivData, ytMeta);
+    source = "preniv";
+  } else if (ytdlResult?.streamUrl) {
+    result = ytdlResult;
+    source = "ytdl";
+  } else if (ytMeta) {
+    result = { id: videoId, ...ytMeta, source: "yt-api-only", hlsUrl: "", streamUrl: "", audioUrl: "", relatedVideos: [], formats: [] };
+    source = "yt-api-only";
+  }
+
+  if (!result) return res.status(500).json({ error: "Failed to fetch video info." });
+
+  const related = await fetchRelatedWithCache(videoId, result.title, ytMeta?.channelId || "");
+  result.relatedVideos = related;
+
+  setCache(cacheKey, result, 30 * 60 * 1000);
+  res.setHeader("X-Cache", "MISS");
+  res.setHeader("X-Source", source);
+  return res.json(result);
 }
 
 export default async function handler(req, res) {
@@ -267,8 +346,7 @@ export default async function handler(req, res) {
           res.setHeader("X-Cache", "MISS");
           return res.json(response);
         } catch (e) {
-          console.error("SEARCH_ERROR:", e.message);
-          return res.status(500).json({ error: "Search failed." });
+          return res.json({ results: [] });
         }
       }
       if (action === "trending") {
@@ -282,8 +360,7 @@ export default async function handler(req, res) {
           res.setHeader("X-Cache", "MISS");
           return res.json(response);
         } catch (e) {
-          console.error("TRENDING_ERROR:", e.message);
-          return res.status(500).json({ error: "Failed to load trending." });
+          return res.json({ results: [] });
         }
       }
     }
@@ -293,7 +370,6 @@ export default async function handler(req, res) {
     if (videoId === "unknown") return res.status(400).json({ error: "Could not extract video ID from URL" });
     return handleVideoRequest(videoId, res);
   } catch (e) {
-    console.error("INFO_ERROR:", e.message, e.stack);
     return res.status(500).json({ error: e.message || "Something went wrong." });
   }
 }

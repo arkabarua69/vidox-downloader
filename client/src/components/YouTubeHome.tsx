@@ -102,7 +102,7 @@ export default function YouTubeHome({ onUrlSubmit, onWatchVideo, user }: Props) 
     }
 
     const history = getWatchHistory(user.sub);
-    const mapped: SearchResult[] = history.slice(0, 8).map((v) => ({
+    const mapped: SearchResult[] = history.slice(0, 12).map((v) => ({
       id: v.id,
       title: v.title,
       channel: v.channel,
@@ -113,7 +113,7 @@ export default function YouTubeHome({ onUrlSubmit, onWatchVideo, user }: Props) 
       description: "",
       type: "video" as const,
     }));
-    setRecentlyWatched(mapped.slice(0, 8));
+    setRecentlyWatched(mapped.slice(0, 12));
 
     const keywords = getWatchKeywords(user.sub);
     if (keywords.length === 0) {
@@ -126,7 +126,7 @@ export default function YouTubeHome({ onUrlSubmit, onWatchVideo, user }: Props) 
     youtubeSearch(query)
       .then((data) => {
         const watchedIds = new Set(history.map((v) => v.id));
-        setForYouVideos(data.results.filter((r) => r.type !== "channel" && r.type !== "playlist" && !watchedIds.has(r.id)).slice(0, 4));
+        setForYouVideos(data.results.filter((r) => r.type !== "channel" && r.type !== "playlist" && !watchedIds.has(r.id)).slice(0, 12));
       })
       .catch(() => setForYouVideos([]))
       .finally(() => setForYouLoading(false));
@@ -172,7 +172,7 @@ export default function YouTubeHome({ onUrlSubmit, onWatchVideo, user }: Props) 
       {user && recentlyWatched.length > 0 && (
         <div className="mb-6">
           <h2 className="text-sm font-semibold mb-3 px-1" style={{ color: "#f1f1f1" }}>Continue Watching</h2>
-          <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide sm:grid sm:grid-cols-4 sm:overflow-x-visible sm:pb-0" style={{ scrollbarWidth: "none" }}>
+          <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide sm:grid sm:grid-cols-6 sm:overflow-x-visible sm:pb-0" style={{ scrollbarWidth: "none" }}>
             {recentlyWatched.map((v) => (
               <div key={v.id} className="shrink-0 w-[200px] sm:w-auto cursor-pointer" onClick={() => onWatchVideo(v.id)}>
                 <div className="relative aspect-video rounded-lg overflow-hidden mb-1.5 bg-[#1a1a1a]">
@@ -194,7 +194,7 @@ export default function YouTubeHome({ onUrlSubmit, onWatchVideo, user }: Props) 
           </div>
           {forYouLoading ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-4 gap-y-6">
-              {[1, 2, 3, 4].map((i) => (
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((i) => (
                 <div key={i} className="animate-pulse">
                   <div className="aspect-video rounded-xl mb-3" style={{ background: "#272727" }} />
                   <div className="flex gap-3">

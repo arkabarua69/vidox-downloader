@@ -32,6 +32,45 @@ function authHeaders(): Record<string, string> {
   return h;
 }
 
+// Client-side cache for GET requests (reduces repeat fetches)
+const clientCache = new Map<string, { data: any; expires: number }>();
+
+function getCached<T>(key: string): T | null {
+  const item = clientCache.get(key);
+  if (!item) return null;
+  if (Date.now() > item.expires) {
+    clientCache.delete(key);
+    return null;
+  }
+  return item.data as T;
+}
+
+function setClientCache(key: string, data: any, ttlMs: number) {
+  if (clientCache.size > 100) {
+    const oldest = clientCache.keys().next().value;
+    clientCache.delete(oldest);
+  }
+  clientCache.set(key, { data, expires: Date.now() + ttlMs });
+}
+
+// Pending request deduplication - prevents duplicate in-flight requests
+const pendingRequests = new Map<string, Promise<any>>();
+
+async function deduplicatedFetch<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
+  const pending = pendingRequests.get(key);
+  if (pending) return pending as T;
+
+  const promise = fetcher().finally(() => pendingRequests.delete(key));
+  pendingRequests.set(key, promise);
+  return promise;
+}
+
+function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs: number = 15000): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timeout));
+}
+
 export interface SearchResult {
   id: string;
   title: string;
@@ -77,47 +116,68 @@ export interface YouTubeChannel {
 }
 
 export async function youtubeSearch(query: string): Promise<SearchResponse> {
-  const res = await fetch(`/api/info?action=search&url=${encodeURIComponent(query)}`, {
-    headers: authHeaders(),
+  const cacheKey = `search:${query}`;
+  const cached = getCached<SearchResponse>(cacheKey);
+  if (cached) return cached;
+
+  return deduplicatedFetch(cacheKey, async () => {
+    const res = await fetchWithTimeout(`/api/info?action=search&url=${encodeURIComponent(query)}`, {
+      headers: authHeaders(),
+    }, 20000);
+    const data = await res.json();
+    if (!res.ok) throw new Error(sanitizeError(data.error || "Search failed"));
+    setClientCache(cacheKey, data, 5 * 60 * 1000);
+    return data;
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(sanitizeError(data.error || "Search failed"));
-  return data;
 }
 
 export async function youtubeTrending(): Promise<SearchResponse> {
-  const res = await fetch(`/api/info?action=trending`, {
-    headers: authHeaders(),
+  const cacheKey = "trending";
+  const cached = getCached<SearchResponse>(cacheKey);
+  if (cached) return cached;
+
+  return deduplicatedFetch(cacheKey, async () => {
+    const res = await fetchWithTimeout(`/api/info?action=trending`, {
+      headers: authHeaders(),
+    }, 20000);
+    const data = await res.json();
+    if (!res.ok) throw new Error(sanitizeError(data.error || "Failed to load trending"));
+    setClientCache(cacheKey, data, 10 * 60 * 1000);
+    return data;
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(sanitizeError(data.error || "Failed to load trending"));
-  return data;
 }
 
 export async function youtubePlaylist(playlistId: string): Promise<YouTubePlaylist> {
-  const res = await fetch(`/api/youtube?action=playlist&id=${encodeURIComponent(playlistId)}`, {
-    headers: authHeaders(),
+  const cacheKey = `playlist:${playlistId}`;
+  const cached = getCached<YouTubePlaylist>(cacheKey);
+  if (cached) return cached;
+
+  return deduplicatedFetch(cacheKey, async () => {
+    const res = await fetchWithTimeout(`/api/youtube?action=playlist&id=${encodeURIComponent(playlistId)}`, {
+      headers: authHeaders(),
+    }, 30000);
+    const data = await res.json();
+    if (!res.ok) throw new Error(sanitizeError(data.error || "Failed to fetch playlist"));
+    setClientCache(cacheKey, data, 5 * 60 * 1000);
+    return data;
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(sanitizeError(data.error || "Failed to fetch playlist"));
-  return data;
 }
 
 export async function youtubeChannel(channelId: string): Promise<YouTubeChannel> {
-  const res = await fetch(`/api/youtube?action=channel&id=${encodeURIComponent(channelId)}`, {
+  const res = await fetchWithTimeout(`/api/youtube?action=channel&id=${encodeURIComponent(channelId)}`, {
     headers: authHeaders(),
-  });
+  }, 20000);
   const data = await res.json();
   if (!res.ok) throw new Error(sanitizeError(data.error || "Failed to fetch channel"));
   return data;
 }
 
 export async function fetchVideoInfo(url: string): Promise<VideoInfo> {
-  const res = await fetch("/api/info", {
+  const res = await fetchWithTimeout("/api/info", {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ url }),
-  });
+  }, 25000);
   const data = await res.json();
   if (!res.ok) {
     if (data.needsAuth) throw { message: data.error || "Authentication required.", needsAuth: true };
@@ -127,9 +187,9 @@ export async function fetchVideoInfo(url: string): Promise<VideoInfo> {
 }
 
 export async function fetchPlaylist(url: string): Promise<PlaylistInfo> {
-  const res = await fetch(`/api/playlist?url=${encodeURIComponent(url)}`, {
+  const res = await fetchWithTimeout(`/api/playlist?url=${encodeURIComponent(url)}`, {
     headers: authHeaders(),
-  });
+  }, 60000);
   const data = await res.json();
   if (!res.ok) {
     if (data.needsAuth) throw { message: data.error || "Authentication required.", needsAuth: true };
@@ -140,14 +200,14 @@ export async function fetchPlaylist(url: string): Promise<PlaylistInfo> {
 
 export async function fetchSummary(video: VideoInfo): Promise<Summary | null> {
   try {
-    const res = await fetch("/api/summary", {
+    const res = await fetchWithTimeout("/api/summary", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         title: video.title, uploader: video.uploader, description: video.description,
         duration: video.duration, view_count: video.view_count, upload_date: video.upload_date,
       }),
-    });
+    }, 10000);
     const data = await res.json();
     return data.summary ? data : null;
   } catch { return null; }
@@ -159,11 +219,11 @@ export async function downloadVideo(url: string, formatId: string, mode: "video"
   else if (formatId) body.formatId = formatId;
   else body.quality = "best";
 
-  const res = await fetch("/api/download", {
+  const res = await fetchWithTimeout("/api/download", {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(body),
-  });
+  }, 30000);
   const data = await res.json();
   if (!res.ok) {
     if (data.needsAuth) throw { message: data.error || "Authentication required.", needsAuth: true };
@@ -173,11 +233,11 @@ export async function downloadVideo(url: string, formatId: string, mode: "video"
 }
 
 export async function downloadPlaylist(urls: string[], quality: string): Promise<{ results: { url: string; downloadUrl: string }[]; errors: any[]; success: number }> {
-  const res = await fetch("/api/playlist-download", {
+  const res = await fetchWithTimeout("/api/playlist-download", {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ urls, quality }),
-  });
+  }, 120000);
   const data = await res.json();
   if (!res.ok) throw new Error(sanitizeError(data.error || "Playlist download failed"));
   return data;
@@ -185,7 +245,7 @@ export async function downloadPlaylist(urls: string[], quality: string): Promise
 
 export async function checkAuthStatus(): Promise<boolean> {
   try {
-    const res = await fetch("/api/auth/status");
+    const res = await fetchWithTimeout("/api/auth/status", {}, 5000);
     const data = await res.json();
     return data.authenticated;
   } catch { return false; }

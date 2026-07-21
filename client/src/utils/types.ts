@@ -28,6 +28,7 @@ export interface Format {
   formatNote: string;
   qualityLabel: string;
   tbr: number;
+  directUrl?: string;
 }
 
 export interface PlaylistVideo {

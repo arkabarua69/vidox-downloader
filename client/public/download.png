@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="630">
+      <stop offset="0%" stop-color="#0f0f0f"/>
+      <stop offset="100%" stop-color="#1a1a2e"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#e63946"/>
+      <stop offset="100%" stop-color="#ff6b6b"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect x="480" y="165" width="240" height="240" rx="32" fill="url(#accent)"/>
+  <path d="M570 225v120l90-60z" fill="white"/>
+  <text x="600" y="460" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="48" font-weight="700" fill="white">Vidox</text>
+  <text x="600" y="510" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="24" font-weight="400" fill="rgba(255,255,255,0.6)">Free Video Downloader</text>
+</svg>

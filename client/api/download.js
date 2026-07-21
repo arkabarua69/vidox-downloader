@@ -70,6 +70,38 @@ export default async function handler(req, res) {
     } catch {}
   }
 
+  const PRENIV_API = "https://prenivapi.vercel.app/api/youtube?url=";
+  if (isYouTube) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      const resp = await fetch(PRENIV_API + encodeURIComponent(cleanUrl), {
+        signal: controller.signal,
+        headers: { "User-Agent": "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36" },
+      });
+      clearTimeout(timeout);
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.status && data.data) {
+          const videoFormats = data.data.downloads?.video || [];
+          const audioFormats = data.data.downloads?.audio || [];
+          let chosenUrl = null;
+          if (quality === "audio" && audioFormats.length > 0) {
+            chosenUrl = audioFormats[0].url;
+          } else if (videoFormats.length > 0) {
+            chosenUrl = videoFormats[0].url;
+          }
+          if (chosenUrl) {
+            const result = { downloadUrl: chosenUrl, fileName: "download.mp4", source: "preniv" };
+            const cacheKey = "stream:" + cleanUrl + ":" + (formatId || quality || "best");
+            setCache(cacheKey, result, 30 * 60 * 1000);
+            return res.json(result);
+          }
+        }
+      }
+    } catch {}
+  }
+
   if (isYouTube) {
     let cookieHeader = null;
     if (userCookieRaw) {

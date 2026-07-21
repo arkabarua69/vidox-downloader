@@ -422,15 +422,10 @@ export async function getChannelVideos(channelId, cookieHeader) {
 
 export async function getDirectStreamUrl(videoId, cookieHeader) {
   const body = {
-    context: {
-      client: {
-        hl: INNERTUBE_CLIENT.hl,
-        gl: INNERTUBE_CLIENT.gl,
-        clientName: INNERTUBE_CLIENT.clientName,
-        clientVersion: INNERTUBE_CLIENT.clientVersion,
-      },
-    },
+    context: makeAndroidContext(),
     videoId,
+    contentCheckOk: true,
+    racyCheckOk: true,
   };
 
   const data = await fetchJSON(

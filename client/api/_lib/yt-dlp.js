@@ -3,9 +3,17 @@ import fs from "fs";
 import https from "https";
 import path from "path";
 
+const SYSTEM_YTDLP = "yt-dlp";
 const YTDLP_PATH = "/tmp/yt-dlp";
 const COOKIES_PATH = "/tmp/cookies.txt";
 const YTDLP_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux";
+
+function findYtDlpPath() {
+  if (fs.existsSync("/usr/local/bin/yt-dlp")) return "/usr/local/bin/yt-dlp";
+  if (fs.existsSync("/usr/bin/yt-dlp")) return "/usr/bin/yt-dlp";
+  if (fs.existsSync(YTDLP_PATH)) return YTDLP_PATH;
+  return SYSTEM_YTDLP;
+}
 
 const EMBEDDED_COOKIES = `# Netscape HTTP Cookie File
 # https://curl.haxx.se/rfc/cookie_spec.html
@@ -37,13 +45,11 @@ const EMBEDDED_COOKIES = `# Netscape HTTP Cookie File
 let ytDlpReady = null;
 
 function getServerCookies() {
-  // Priority 1: Environment variable (Base64 encoded)
   if (process.env.YOUTUBE_COOKIES) {
     try {
       return Buffer.from(process.env.YOUTUBE_COOKIES, "base64").toString("utf-8");
     } catch {}
   }
-  // Priority 2: Hardcoded fallback
   return EMBEDDED_COOKIES;
 }
 
@@ -59,8 +65,8 @@ function downloadYtDlp() {
   ytDlpReady = new Promise((resolve, reject) => {
     try {
       ensureCookies();
-      if (fs.existsSync(YTDLP_PATH)) {
-        try { fs.chmodSync(YTDLP_PATH, 0o755); } catch(e) {}
+      if (fs.existsSync(findYtDlpPath())) {
+        try { fs.chmodSync(findYtDlpPath(), 0o755); } catch(e) {}
         return resolve();
       }
     } catch(e) {}
@@ -95,10 +101,11 @@ function downloadYtDlp() {
 }
 
 function runYtDlp(args, timeout = 55000) {
+  const ytDlpPath = findYtDlpPath();
   const nodePath = process.execPath || "/usr/bin/node";
   const env = { ...process.env, PATH: `${path.dirname(nodePath)}:${process.env.PATH || ""}` };
   return new Promise((resolve, reject) => {
-    execFile(YTDLP_PATH, ["--js-runtimes", `node:${nodePath}`, ...args], { timeout, maxBuffer: 10 * 1024 * 1024, env }, (err, stdout, stderr) => {
+    execFile(ytDlpPath, ["--js-runtimes", `node:${nodePath}`, ...args], { timeout, maxBuffer: 10 * 1024 * 1024, env }, (err, stdout, stderr) => {
       if (err) reject(new Error(stderr || err.message));
       else resolve({ stdout, stderr });
     });

@@ -1,32 +1,131 @@
 {
-  "buildCommand": "npx vite build",
+  "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "installCommand": "npm install",
-  "framework": null,
+  "framework": "vite",
+  "rewrites": [
+    {
+      "source": "/((?!api/|assets/|.*\\.).*)",
+      "destination": "/index.html"
+    }
+  ],
   "functions": {
-    "api/info.js": { "maxDuration": 60 },
-    "api/download.js": { "maxDuration": 60 },
-    "api/health.js": { "maxDuration": 10 },
-    "api/auth/status.js": { "maxDuration": 10 },
-    "api/auth/cookies.js": { "maxDuration": 10 }
+    "api/info.js": {
+      "maxDuration": 60
+    },
+    "api/download.js": {
+      "maxDuration": 60
+    },
+    "api/health.js": {
+      "maxDuration": 10
+    },
+    "api/stream.js": {
+      "maxDuration": 30
+    },
+    "api/summary.js": {
+      "maxDuration": 10
+    },
+    "api/playlist.js": {
+      "maxDuration": 60
+    },
+    "api/playlist-download.js": {
+      "maxDuration": 60
+    },
+    "api/auth/status.js": {
+      "maxDuration": 10
+    },
+    "api/auth/cookies.js": {
+      "maxDuration": 10
+    },
+    "api/auth/refresh.js": {
+      "maxDuration": 10
+    },
+    "api/auth/health.js": {
+      "maxDuration": 10
+    }
   },
   "headers": [
     {
-      "source": "/(.*)",
+      "source": "/assets/(.*)",
       "headers": [
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "X-Frame-Options", "value": "DENY" },
-        { "key": "X-XSS-Protection", "value": "1; mode=block" },
-        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
-        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=(), interest-cohort=()" },
-        { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains; preload" }
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
       ]
     },
     {
-      "source": "/api/(.*)",
+      "source": "/(.*)",
       "headers": [
-        { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate" },
-        { "key": "Pragma", "value": "no-cache" }
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "X-XSS-Protection",
+          "value": "1; mode=block"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=(), interest-cohort=()"
+        },
+        {
+          "key": "Strict-Transport-Security",
+          "value": "max-age=63072000; includeSubDomains; preload"
+        }
+      ]
+    },
+    {
+      "source": "/api/info(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, s-maxage=1800, stale-while-revalidate=3600"
+        }
+      ]
+    },
+    {
+      "source": "/api/summary(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, s-maxage=3600, stale-while-revalidate=7200"
+        }
+      ]
+    },
+    {
+      "source": "/api/health",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, s-maxage=300, stale-while-revalidate=600"
+        }
+      ]
+    },
+    {
+      "source": "/api/download(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        }
+      ]
+    },
+    {
+      "source": "/api/stream(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        }
       ]
     }
   ]

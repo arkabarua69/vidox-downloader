@@ -1,42 +1,10 @@
-import https from "https";
-import http from "http";
+import ytdl from "@distube/ytdl-core";
 
-function followRedirects(urlStr, maxRedirects = 10, cookies = {}) {
-  return new Promise((resolve, reject) => {
-    if (maxRedirects <= 0) return reject(new Error("Too many redirects"));
-    const parsed = new URL(urlStr);
-    const lib = parsed.protocol === "https:" ? https : http;
-    const cookieStr = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
-    const headers = {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-      "Accept": "*/*",
-      "Accept-Language": "en-US,en;q=0.9",
-      "Referer": "https://www.youtube.com/",
-    };
-    if (cookieStr) headers["Cookie"] = cookieStr;
-
-    const req = lib.get({ hostname: parsed.hostname, path: parsed.pathname + parsed.search, headers }, (res) => {
-      const setCookies = res.headers["set-cookie"];
-      if (setCookies) {
-        for (const sc of (Array.isArray(setCookies) ? setCookies : [setCookies])) {
-          const pair = sc.split(";")[0].trim();
-          const eq = pair.indexOf("=");
-          if (eq > 0) cookies[pair.substring(0, eq)] = pair.substring(eq + 1);
-        }
-      }
-
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        const next = new URL(res.headers.location, urlStr).href;
-        res.resume();
-        resolve(followRedirects(next, maxRedirects - 1, cookies));
-      } else {
-        resolve({ stream: res, statusCode: res.statusCode, headers: res.headers, finalUrl: urlStr });
-      }
-    });
-    req.on("error", reject);
-    req.setTimeout(30000, () => { req.destroy(); reject(new Error("Timeout")); });
-  });
-}
+const agents = [
+  ytdl.createAgent(),
+  ytdl.createAgent([{"cookie":"CONSENT=YES+cb.20210420-15-p0.en+FX+999"}]),
+];
+let agentIdx = 0;
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -44,34 +12,50 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Range");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  const { url } = req.query;
-  if (!url) return res.status(400).json({ error: "URL is required" });
+  const videoId = req.query.videoId;
+  if (!videoId) return res.status(400).json({ error: "videoId is required" });
 
   try {
-    const fetchHeaders = {};
-    if (req.headers.range) fetchHeaders.range = req.headers.range;
+    const agent = agents[agentIdx % agents.length];
+    agentIdx++;
 
-    const { stream, statusCode, headers } = await followRedirects(url);
-
-    if (statusCode && statusCode >= 400) {
-      stream.resume();
-      return res.status(502).json({ error: `Upstream returned ${statusCode}` });
+    const origCwd = process.cwd();
+    process.chdir("/tmp");
+    let info;
+    try {
+      const infoPromise = ytdl.getInfo(videoId, { agent });
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("ytdl timeout")), 15000));
+      info = await Promise.race([infoPromise, timeoutPromise]);
+    } finally {
+      process.chdir(origCwd);
     }
 
-    const passHeaders = ["content-type", "content-length", "content-range", "accept-ranges", "cache-control"];
-    for (const h of passHeaders) {
-      if (headers[h]) res.setHeader(h, headers[h]);
-    }
-    res.setHeader("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
-    res.status(statusCode || 200);
+    const format = info.formats.find(f => f.itag === 18) || info.formats.find(f => f.hasAudio && f.hasVideo);
+    if (!format) throw new Error("No suitable format found");
 
-    stream.pipe(res);
+    const stream = ytdl.downloadFromInfo(info, { format, agent });
+
+    res.setHeader("Content-Type", "video/mp4");
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges, Content-Type");
+    res.status(200);
+
+    stream.on("data", (chunk) => {
+      const ok = res.write(chunk);
+      if (!ok) stream.pause();
+    });
+    res.on("drain", () => {
+      if (stream.isPaused()) stream.resume();
+    });
+    stream.on("end", () => res.end());
     stream.on("error", (err) => {
-      console.error("STREAM_PROXY_ERROR:", err.message);
-      if (!res.headersSent) res.status(502).json({ error: "Stream proxy failed" });
+      console.error("STREAM_ERROR:", err.message);
+      if (!res.headersSent) res.status(500).json({ error: "Stream failed: " + err.message });
+      else res.end();
     });
   } catch (e) {
     console.error("STREAM_ERROR:", e.message);
-    if (!res.headersSent) res.status(500).json({ error: "Invalid stream URL" });
+    if (!res.headersSent) res.status(500).json({ error: "Stream proxy failed: " + e.message });
   }
 }
